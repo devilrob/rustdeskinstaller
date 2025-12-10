@@ -44,22 +44,25 @@ jobs:
 
       - name: Install prerequisites
         run: |
-          sudo apt-get install ca-certificates -y
+          # Actualizamos primero
           sudo apt-get update -y
+          # Instalamos dependencias usando los paquetes disponibles en Ubuntu 22.04
           sudo apt-get install -y \
+            ca-certificates \
             clang \
             cmake \
             curl \
             gcc \
             git \
             g++ \
-            libclang-10-dev \
+            libclang-dev \
             libgtk-3-dev \
-            llvm-10-dev \
+            llvm-dev \
             nasm \
             ninja-build \
             pkg-config \
             wget
+
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
