@@ -68,11 +68,13 @@ env:
   # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
   TAG_NAME: "${{ inputs.upload-tag }}"
-  # vcpkg version is now managed by run-vcpkg at HEAD; no fixed commit to avoid old registry issues
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # usamos solo el caché por defecto, sin backend x-gha (ya eliminado)
+  VCPKG_BINARY_SOURCES: "clear;default"
+  # ruta fija donde vamos a clonar vcpkg
+  VCPKG_ROOT: "C:/vcpkg"
   VERSION: "${{ fromJson(inputs.extras).version }}"
   NDK_VERSION: "r27c"
-  # signing keys env variable checks
+  #signing keys env variable checks
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
   # To make a custom build with your own servers set the below secret values
@@ -110,19 +112,12 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          # - { target: i686-pc-windows-msvc        , os: windows-2022                  }
-          # - { target: x86_64-pc-windows-gnu       , os: windows-2022                  }
           - {
               target: x86_64-pc-windows-msvc,
               os: windows-2022,
               arch: x86_64,
               vcpkg-triplet: x64-windows-static,
             }
-          # - { target: aarch64-pc-windows-msvc, os: windows-2022, arch: aarch64 }
-
-    # 🔧 Aseguramos VCPKG_ROOT para los pasos que usan bash
-    env:
-      VCPKG_ROOT: C:/vcpkg
 
     steps:
       - name: Export GitHub Actions cache environment variables
@@ -167,7 +162,7 @@ jobs:
         uses: actions/download-artifact@master
         with:
           name: bridge-artifact
-          path: ./ 
+          path: ./        
 
       - name: Install ImageMagick on Windows
         run: |
@@ -284,28 +279,32 @@ jobs:
           customHeaders: '{"Content-Type": "application/json"}'
           data: '{"uuid": "${{ inputs.uuid }}", "status": "20% complete"}'
 
-      - name: Setup vcpkg with Github Actions binary cache
-        uses: lukka/run-vcpkg@v11
-        with:
-          # Usamos VCPKG_ROOT definido en el job y dejamos que vcpkg use el HEAD actual
-          vcpkgDirectory: ${{ env.VCPKG_ROOT }}
-          doNotCache: false
+      # 🔧 NUEVO: instalamos vcpkg a mano, sin run-vcpkg
+      - name: Install vcpkg
+        shell: pwsh
+        run: |
+          if (!(Test-Path -Path "C:\vcpkg")) {
+            git clone https://github.com/microsoft/vcpkg.git "C:\vcpkg"
+          }
+          Set-Location "C:\vcpkg"
+          .\bootstrap-vcpkg.bat -disableMetrics
 
       - name: Install vcpkg dependencies
         env:
           VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
         shell: bash
         run: |
-          if ! $VCPKG_ROOT/vcpkg \
+          echo "Using VCPKG_ROOT=${VCPKG_ROOT}"
+          if ! "${VCPKG_ROOT}/vcpkg" \
             install \
             --triplet ${{ matrix.job.vcpkg-triplet }} \
-            --x-install-root="$VCPKG_ROOT/installed"; then
+            --x-install-root="${VCPKG_ROOT}/installed"; then
             find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
-              echo "$_1:";
-              echo "======";
-              cat "$_1";
-              echo "======";
-              echo "";
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
             done
             exit 1
           fi
@@ -319,7 +318,6 @@ jobs:
           mv ./res/icon.ico ./res/icon.ico.bak
           mv ./res/icon.png ./res/icon.png.bak
           mv ./res/tray-icon.ico ./res/tray-icon.ico.bak
-          #echo "${{ inputs.iconbase64 }}" | base64 -d > ./res/icon.png 
 
       - name: magick stuff
         if: ${{ inputs.iconlink != 'false' }}
@@ -389,7 +387,7 @@ jobs:
           url: ${{ env.STATUS_URL }}
           method: 'POST'
           customHeaders: '{"Content-Type": "application/json"}'
-          data: '{"uuid": "${{ inputs.uuid }}", "status": "25% complete"}'
+          data: '{"uuid": "${{ inputs.uuid }}", "status": "50% complete, this step takes about 5 minutes, be patient."}'
 
       - name: replace flutter icons
         if: ${{ inputs.iconlink != 'false' }}
@@ -400,14 +398,6 @@ jobs:
           flutter pub get
           flutter pub run flutter_launcher_icons
           cd ..
-
-      - name: Report Status
-        uses: fjogeleit/http-request-action@v1
-        with:
-          url: ${{ env.STATUS_URL }}
-          method: 'POST'
-          customHeaders: '{"Content-Type": "application/json"}'
-          data: '{"uuid": "${{ inputs.uuid }}", "status": "50% complete, this step takes about 5 minutes, be patient."}'
 
       - name: Build rustdesk
         run: |
@@ -433,8 +423,6 @@ jobs:
           Invoke-WebRequest -Uri ${{ fromJson(inputs.logolink).url }}/get_png?filename=${{ fromJson(inputs.logolink).file }}"&"uuid=${{ fromJson(inputs.logolink).uuid }} -OutFile ./rustdesk/data/flutter_assets/assets/logo.png
 
       - name: find Runner.res
-        # Windows: find Runner.res (compiled from ./flutter/windows/runner/Runner.rc), copy to ./Runner.res
-        # Runner.rc does not contain actual version, but Runner.res does
         continue-on-error: true
         shell: bash
         run: |
@@ -484,7 +472,7 @@ jobs:
         shell: bash
         run: |
           echo -n "${{ env.CUSTOM }}" | cat > ./rustdesk/custom.txt
-        
+
       - name: Build self-extracted executable
         shell: bash
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -566,7 +554,7 @@ jobs:
           customHeaders: '{"Content-Type": "application/json"}'
           data: '{"uuid": "${{ inputs.uuid }}", "status": "Generation failed, try again"}'
 
-      - name: failed
+      - name: cancelled
         if: cancelled()
         uses: fjogeleit/http-request-action@v1
         with:
