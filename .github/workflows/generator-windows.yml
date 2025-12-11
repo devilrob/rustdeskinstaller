@@ -56,8 +56,8 @@ on:
         type: string
 
 env:
-  SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
-  RUST_VERSION: "1.75" # sciter failed on m1 with 1.78 because of https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
+  SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503
+  RUST_VERSION: "1.75"
   CARGO_NDK_VERSION: "3.1.2"
   SCITER_ARMV7_CMAKE_VERSION: "3.29.7"
   SCITER_NASM_DEBVERSION: "2.14-1"
@@ -68,15 +68,15 @@ env:
   # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
   TAG_NAME: "${{ inputs.upload-tag }}"
-  # usamos solo el caché por defecto, sin backend x-gha (ya eliminado)
+  # x-gha fue eliminado, usamos el backend por defecto
   VCPKG_BINARY_SOURCES: "clear;default"
-  # ruta fija donde vamos a clonar vcpkg
-  VCPKG_ROOT: "C:/vcpkg"
   # vcpkg version: 2024.07.12
   VCPKG_COMMIT_ID: "b2cb0da531c2f1f740045bfe7c4dac59f0b2b69c"
+  # ruta explícita de vcpkg para los pasos posteriores
+  VCPKG_ROOT: "C:/vcpkg"
   VERSION: "${{ fromJson(inputs.extras).version }}"
   NDK_VERSION: "r27c"
-  #signing keys env variable checks
+  # signing keys env variable checks
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
   # To make a custom build with your own servers set the below secret values
@@ -131,12 +131,12 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       
-      - name: Set rdgen value
+      - name: Set rdgen value (use rdgen STATUS_URL)
         if: ${{ fromJson(inputs.extras).rdgen == 'true' }}
         run: |
           echo "STATUS_URL=${{ secrets.GENURL }}/updategh" >> $env:GITHUB_ENV
 
-      - name: Set rdgen value
+      - name: Set rdgen value (use API server STATUS_URL)
         if: ${{ fromJson(inputs.extras).rdgen == 'false' }}
         run: |
           echo "STATUS_URL=${{ inputs.apiServer }}/api/updategh" >> $env:GITHUB_ENV
@@ -149,24 +149,29 @@ jobs:
           customHeaders: '{"Content-Type": "application/json"}'
           data: '{"uuid": "${{ inputs.uuid }}", "status": "5% complete"}'
 
-      - name: Checkout source code
+      # --------- CHECKOUT RUSTDESK (CON SUBMÓDULOS) ----------
+      - name: Checkout source code (tag)
         if: ${{ env.VERSION != 'master' }}
         uses: actions/checkout@v4
         with:
           repository: rustdesk/rustdesk
           ref: refs/tags/${{ env.VERSION }}
+          submodules: recursive
+          fetch-depth: 0
 
-      - name: Checkout source code
+      - name: Checkout source code (master)
         if: ${{ env.VERSION == 'master' }}
         uses: actions/checkout@v4
         with:
           repository: rustdesk/rustdesk
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Restore bridge files
         uses: actions/download-artifact@master
         with:
           name: bridge-artifact
-          path: ./  
+          path: ./ 
 
       - name: Install ImageMagick on Windows
         run: |
@@ -196,7 +201,7 @@ jobs:
           sed -i -e 's|"RustDesk"|"${{ inputs.appname }}"|' ./flutter/windows/runner/Runner.rc
           # ./src/lang/en.rs
           sed -i -e 's|RustDesk|${{ inputs.appname }}|' ./src/lang/en.rs
-
+             
       - name: change url to custom
         if: fromJson(inputs.extras).urlLink != 'https://rustdesk.com'
         continue-on-error: true
@@ -233,7 +238,7 @@ jobs:
           data: '{"uuid": "${{ inputs.uuid }}", "status": "10% complete"}'
 
       - name: Install flutter
-        uses: subosito/flutter-action@v2.12.0 #https://github.com/subosito/flutter-action/issues/277
+        uses: subosito/flutter-action@v2.12.0
         with:
           channel: "stable"
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -274,7 +279,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ matrix.job.os }}
-
+        
       - name: Report Status
         uses: fjogeleit/http-request-action@v1
         with:
@@ -283,31 +288,32 @@ jobs:
           customHeaders: '{"Content-Type": "application/json"}'
           data: '{"uuid": "${{ inputs.uuid }}", "status": "20% complete"}'
 
-      # Instalamos vcpkg a mano (sin run-vcpkg)
-      - name: Install vcpkg
-        shell: pwsh
-        run: |
-          if (!(Test-Path -Path "C:\vcpkg")) {
-            git clone https://github.com/microsoft/vcpkg.git "C:\vcpkg"
-          }
-          Set-Location "C:\vcpkg"
-          .\bootstrap-vcpkg.bat -disableMetrics
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
 
       - name: Install vcpkg dependencies
         env:
           VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
-        shell: pwsh
+        shell: bash
         run: |
-          $ErrorActionPreference = "Stop"
-          $triplet = "${{ matrix.job.vcpkg-triplet }}"
-          $vcpkgRoot = "C:\vcpkg"
-          $vcpkgExe = "$vcpkgRoot\vcpkg.exe"
-
-          if (!(Test-Path $vcpkgExe)) {
-            Write-Error "vcpkg.exe no existe en $vcpkgExe. Revisa el paso 'Install vcpkg (clone + bootstrap)'."
-          }
-
-          & $vcpkgExe install --triplet $triplet --x-install-root "$vcpkgRoot\installed"
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet ${{ matrix.job.vcpkg-triplet }} \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
 
       - name: icon stuff
         if: ${{ inputs.iconlink != 'false' }}
@@ -386,6 +392,24 @@ jobs:
           url: ${{ env.STATUS_URL }}
           method: 'POST'
           customHeaders: '{"Content-Type": "application/json"}'
+          data: '{"uuid": "${{ inputs.uuid }}", "status": "25% complete"}'
+
+      - name: replace flutter icons
+        if: ${{ inputs.iconlink != 'false' }}
+        continue-on-error: true
+        run: |
+          cd ./flutter
+          flutter pub upgrade win32
+          flutter pub get
+          flutter pub run flutter_launcher_icons
+          cd ..
+
+      - name: Report Status
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: ${{ env.STATUS_URL }}
+          method: 'POST'
+          customHeaders: '{"Content-Type": "application/json"}'
           data: '{"uuid": "${{ inputs.uuid }}", "status": "50% complete, this step takes about 5 minutes, be patient."}'
 
       - name: Build rustdesk
@@ -412,8 +436,6 @@ jobs:
           Invoke-WebRequest -Uri ${{ fromJson(inputs.logolink).url }}/get_png?filename=${{ fromJson(inputs.logolink).file }}"&"uuid=${{ fromJson(inputs.logolink).uuid }} -OutFile ./rustdesk/data/flutter_assets/assets/logo.png
 
       - name: find Runner.res
-        # Windows: find Runner.res (compiled from ./flutter/windows/runner/Runner.rc), copy to ./Runner.res
-        # Runner.rc does not contain actual version, but Runner.res does
         continue-on-error: true
         shell: bash
         run: |
@@ -463,6 +485,7 @@ jobs:
         shell: bash
         run: |
           echo -n "${{ env.CUSTOM }}" | cat > ./rustdesk/custom.txt
+        
 
       - name: Build self-extracted executable
         shell: bash
@@ -528,7 +551,7 @@ jobs:
           curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ fromJson(inputs.extras).token }}" -F "file=@./SignOutput/${{ inputs.filename }}.exe" ${{ inputs.apiServer }}/api/save_custom_client
           curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ fromJson(inputs.extras).token }}" -F "file=@./SignOutput/${{ inputs.filename }}.msi" ${{ inputs.apiServer }}/api/save_custom_client
 
-      - name: Report Status
+      - name: Report Status (success)
         uses: fjogeleit/http-request-action@v1
         with:
           url: ${{ env.STATUS_URL }}
@@ -545,7 +568,7 @@ jobs:
           customHeaders: '{"Content-Type": "application/json"}'
           data: '{"uuid": "${{ inputs.uuid }}", "status": "Generation failed, try again"}'
 
-      - name: failed
+      - name: cancelled
         if: cancelled()
         uses: fjogeleit/http-request-action@v1
         with:
