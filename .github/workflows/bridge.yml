@@ -25,32 +25,39 @@ jobs:
         job:
           - {
               target: x86_64-unknown-linux-gnu,
-              os: ubuntu-22.04,
+              os: ubuntu-20.04,
               extra-build-args: "",
             }
+
     steps:
-      - name: Checkout source code
+      # ==============================
+      # CHECKOUT RUSTDESK (CON SUBMODULES)
+      # ==============================
+      - name: Checkout source code (tag)
         if: ${{ inputs.version != 'master' }}
         uses: actions/checkout@v4
         with:
           repository: rustdesk/rustdesk
-          submodules: recursive
-          fetch-depth: 0
           ref: refs/tags/${{ inputs.version }}
           submodules: recursive
-      - name: Checkout source code
+          fetch-depth: 0
+
+      - name: Checkout source code (master)
         if: ${{ inputs.version == 'master' }}
         uses: actions/checkout@v4
         with:
           repository: rustdesk/rustdesk
           submodules: recursive
+          fetch-depth: 0
+
+      # ==============================
+      # DEPENDENCIAS
+      # ==============================
       - name: Install prerequisites
         run: |
-          # Actualizamos primero
           sudo apt-get update -y
-          # Instalamos dependencias usando los paquetes disponibles en Ubuntu 22.04
+          sudo apt-get install -y ca-certificates
           sudo apt-get install -y \
-            ca-certificates \
             clang \
             cmake \
             curl \
@@ -64,7 +71,6 @@ jobs:
             ninja-build \
             pkg-config \
             wget
-
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
@@ -99,7 +105,10 @@ jobs:
 
       - name: Run flutter rust bridge
         run: |
-          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+          ~/.cargo/bin/flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart \
+            --c-output ./flutter/macos/Runner/bridge_generated.h
           cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
 
       - name: Upload Artifact
